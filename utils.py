@@ -143,48 +143,55 @@ def make_name(strs,fixed_lengths):
 def my_product(inp):
     return [dict(zip(inp.keys(), values)) for values in product(*inp.values())]
 
-def run_configuration(config):
-    timer=Timer()
-    model=get_model(config['model'])
-    timer()
-    similarity=Similarity()
-    sentences=read_wikisent(config['dataset'],config['N'])
-    timer()
-    print('Computing embeddings...')
-    token_embeddings=make_embeddings(sentences,model,config['pooling'],config['max_length'])
-    timer()
-    print('Computing similarities...')
-    per_layer_similarities=list(map(lambda x: get_similarity_prompt(x,config['N'],similarity),tqdm(token_embeddings)))
-    timer()
-    print(timer.get_times())
-    print(per_layer_similarities)
+def run_configuration(config,anisotropy_results):
     txt_name=config['dataset'].replace('.txt','')
     model_name=config['model'].split('/')[-1]
+    name=f"{txt_name}|{model_name}|{config['pooling']}|{config['N']}|{config['max_length']}"
+    if anisotropy_results.shape[0]==0 or (anisotropy_results['name']==name).sum()==0:
+        timer=Timer()
+        model=get_model(config['model'])
+        timer()
+        similarity=Similarity()
+        sentences=read_wikisent(config['dataset'],config['N'])
+        timer()
+        print('Computing embeddings...')
+        token_embeddings=make_embeddings(sentences,model,config['pooling'],config['max_length'])
+        timer()
+        print('Computing similarities...')
+        per_layer_similarities=list(map(lambda x: get_similarity_prompt(x,config['N'],similarity),tqdm(token_embeddings)))
+        timer()
+        print(timer.get_times())
+        print(per_layer_similarities)
+
+
+        #name=make_name([txt_name,model_name,POOLING,N],[25,30,20,5])
+        
+        rows=pd.DataFrame([{
+            'name':name,
+            'dataset':txt_name,
+            'model':model_name,
+            'pooling':config['pooling'],
+            'N':config['N'],
+            'max_length':config['max_length'],
+            'layer':i,
+            'anisotropy':per_layer_similarities[i],
+            'inference_time':timer.get_times()[0][2]/config['N']
+        } for i in range(len(per_layer_similarities))])
+        anisotropy_results=anisotropy_results.append(rows)
+        print(anisotropy_results)
+        anisotropy_results.to_csv('anisotropy_results.csv')
+    return anisotropy_results
+
+def grid_search(configs):
     try:
         anisotropy_results=pd.read_csv('anisotropy_results.csv',index_col=0)
     except:
         anisotropy_results=pd.DataFrame()
-    #name=make_name([txt_name,model_name,POOLING,N],[25,30,20,5])
-    rows=pd.DataFrame([{
-        'dataset':txt_name,
-        'model':model_name,
-        'pooling':config['pooling'],
-        'N':config['N'],
-        'max_length':config['max_length'],
-        'layer':i,
-        'anisotropy':per_layer_similarities[i],
-        'inference_time':timer.get_times()[0][2]/config['N']
-    } for i in range(len(per_layer_similarities))])
-    anisotropy_results=anisotropy_results.append(rows)
-    print(anisotropy_results)
-    anisotropy_results.to_csv('anisotropy_results.csv')
-
-def grid_search(configs):
     configs=my_product(configs)
     print(pd.DataFrame(configs))
     for i in tqdm(range(len(configs))):
         config=configs[i]
-        run_configuration(config)
+        anisotropy_results=run_configuration(config,anisotropy_results)
 
 def main():
     with open('config.json','r') as f:

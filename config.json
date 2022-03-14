@@ -1,11 +1,14 @@
 {
-    "dataset":["wiki1m_for_simcse.txt","wiki1m_for_simcse_shuf.txt"],
-    "model":["bert-base-uncased","princeton-nlp/unsup-simcse-bert-base-uncased"],
+    "dataset":["wiki1m_for_simcse_shuf.txt"],
+    "model":[
+        "bert-base-uncased","bert-base-cased",
+        "princeton-nlp/unsup-simcse-bert-base-uncased","princeton-nlp/sup-simcse-bert-base-uncased",
+        "../unsup_prompt","../sup_prompt"],
     "pooling":[
         "none","none_no_SEP","none_no_CLS","none_no_SEP_no_CLS",
         "avg","avg_no_SEP","avg_no_CLS","avg_no_SEP_no_CLS",
         "CLS"
     ],
     "max_length":32,
-    "N":10
+    "N":1000
 }
