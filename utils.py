@@ -11,12 +11,14 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import pandas as pd
 from itertools import product
+from nltk.corpus import stopwords
 
 
 random.seed(1234)
 np.random.seed(1234)
 #N=10
 BATCH_SIZE=128
+STOPWORDS=stopwords.words('english')
 #MAX_LENGTH=32
 #POOLING='CLS'
 #MODEL_NAME="bert-base-uncased"
@@ -35,6 +37,7 @@ class Timer:
         return out_times,out_times/out_times.sum()
 
 def get_model(model_name):
+    print(f'getting model from {model_name}...')
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModel.from_pretrained(model_name)
     def inference(sentence_batch):
@@ -44,7 +47,7 @@ def get_model(model_name):
             padding=True)
         with torch.no_grad():
             outputs = model(**batch,output_hidden_states=True)
-        return outputs.hidden_states,batch['attention_mask']
+        return outputs.hidden_states,batch['attention_mask'], list(map(tokenizer.convert_ids_to_tokens,batch.input_ids))
     return inference
 
 class Similarity(nn.Module):
@@ -95,18 +98,32 @@ def get_embedding_pairs(x):
     res=res.reshape(n_tokens//2,2,embed_dim)
     return res
     
-def make_embeddings(sentences,model,pooling,max_length):
+def remove_stopword_embeddings(batch_tokens,attention_mask,no_stop):
+    if no_stop:
+        stopwords_mask=np.ones(attention_mask.shape)
+        for i,sent in enumerate(batch_tokens):
+            for j,token in enumerate(sent):
+                if token in STOPWORDS:
+                    stopwords_mask[i,j]=0
+        attention_mask=attention_mask*torch.from_numpy(stopwords_mask)
+    return attention_mask
+
+def make_embeddings(sentences,model,pooling,max_length,cased,no_stop):
     batch=[]
     token_embeddings=[]
     for sentence in tqdm(sentences):
-        batch.append(' '.join(sentence.replace('\n', '').lower().split()[:max_length]))
+        if cased:
+            sentence=sentence.lower()
+        batch.append(' '.join(sentence.replace('\n', '').split()[:max_length]))
         if len(batch) >= BATCH_SIZE:
-            model_out,attention_mask=model(batch)
+            model_out,attention_mask,batch_tokens=model(batch)
+            attention_mask=remove_stopword_embeddings(batch_tokens,attention_mask,no_stop)
             model_out=list(map(lambda x: embedding2numpy(x,attention_mask,pooling),model_out))
             token_embeddings.append(model_out)
             batch = []
     if len(batch) >= 0:
-        model_out,attention_mask=model(batch)
+        model_out,attention_mask,batch_tokens=model(batch)
+        attention_mask=remove_stopword_embeddings(batch_tokens,attention_mask,no_stop)
         model_out=list(map(lambda x: embedding2numpy(x,attention_mask,pooling),model_out))
         token_embeddings.append(model_out)
     token_embeddings=list(zip(*token_embeddings))
@@ -147,7 +164,26 @@ def run_configuration(config,anisotropy_results):
     txt_name=config['dataset'].replace('.txt','')
     model_name=config['model'].split('/')[-1]
     name=f"{txt_name}|{model_name}|{config['pooling']}|{config['N']}|{config['max_length']}"
-    if anisotropy_results.shape[0]==0 or (anisotropy_results['name']==name).sum()==0:
+    combination_config={
+        'dataset':txt_name,
+        'model':model_name,
+        'pooling':config['pooling'],
+        'N':config['N'],
+        'max_length':config['max_length'],
+        'cased':config['cased'],
+        'no_stop':config['no_stop']
+    }
+
+    query=[]
+    for k,v in combination_config.items():
+        if type(v)==str:
+            query.append(f"{k} == '{v}'")
+        else:
+            query.append(f"{k} == {v}")
+
+    query=' & '.join(query)
+
+    if anisotropy_results.shape[0]==0 or anisotropy_results.query(query).shape[0]==0:
         timer=Timer()
         model=get_model(config['model'])
         timer()
@@ -155,7 +191,7 @@ def run_configuration(config,anisotropy_results):
         sentences=read_wikisent(config['dataset'],config['N'])
         timer()
         print('Computing embeddings...')
-        token_embeddings=make_embeddings(sentences,model,config['pooling'],config['max_length'])
+        token_embeddings=make_embeddings(sentences,model,config['pooling'],config['max_length'],config['cased'],config['no_stop'])
         timer()
         print('Computing similarities...')
         per_layer_similarities=list(map(lambda x: get_similarity_prompt(x,config['N'],similarity),tqdm(token_embeddings)))
@@ -166,17 +202,14 @@ def run_configuration(config,anisotropy_results):
 
         #name=make_name([txt_name,model_name,POOLING,N],[25,30,20,5])
         
-        rows=pd.DataFrame([{
-            'name':name,
-            'dataset':txt_name,
-            'model':model_name,
-            'pooling':config['pooling'],
-            'N':config['N'],
-            'max_length':config['max_length'],
-            'layer':i,
-            'anisotropy':per_layer_similarities[i],
-            'inference_time':timer.get_times()[0][2]/config['N']
-        } for i in range(len(per_layer_similarities))])
+        rows=pd.DataFrame([dict(
+            **combination_config,
+            name=name,
+            layer=i,
+            anisotropy=per_layer_similarities[i],
+            inference_time=timer.get_times()[0][2]/config['N'],
+            
+         ) for i in range(len(per_layer_similarities))])
         anisotropy_results=anisotropy_results.append(rows)
         print(anisotropy_results)
         anisotropy_results.to_csv('anisotropy_results.csv')

@@ -1,5 +1,5 @@
 {
-    "dataset":["wiki1m_for_simcse_shuf.txt"],
+    "dataset":["wiki1m_for_simcse.txt"],
     "model":[
         "bert-base-uncased","bert-base-cased",
         "princeton-nlp/unsup-simcse-bert-base-uncased","princeton-nlp/sup-simcse-bert-base-uncased",
@@ -10,5 +10,7 @@
         "CLS"
     ],
     "max_length":32,
-    "N":1000
+    "N":1000,
+    "cased":[false,true],
+    "no_stop":[false,true]
 }
