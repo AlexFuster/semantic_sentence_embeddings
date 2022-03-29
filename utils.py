@@ -112,7 +112,7 @@ def make_embeddings(sentences,model,pooling,max_length,cased,no_stop):
     batch=[]
     token_embeddings=[]
     for sentence in tqdm(sentences):
-        if cased:
+        if not cased:
             sentence=sentence.lower()
         batch.append(' '.join(sentence.replace('\n', '').split()[:max_length]))
         if len(batch) >= BATCH_SIZE:
@@ -226,8 +226,8 @@ def grid_search(configs):
         config=configs[i]
         anisotropy_results=run_configuration(config,anisotropy_results)
 
-def main():
-    with open('config.json','r') as f:
+def main(config_path):
+    with open(config_path,'r') as f:
         configs=json.load(f)
     for k,v in configs.items():
         if type(v)!=list:
@@ -236,6 +236,10 @@ def main():
 
 
 if __name__=="__main__":
-    main()
+    if len(sys.argv)>1:
+        config_path=sys.argv[1]
+    else:
+        config_path='config.json'
+    main(config_path)
 
     

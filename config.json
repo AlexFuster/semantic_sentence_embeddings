@@ -11,6 +11,6 @@
     ],
     "max_length":32,
     "N":1000,
-    "cased":[false,true],
+    "cased":[false],
     "no_stop":[false,true]
 }
