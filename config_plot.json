@@ -1,0 +1,18 @@
+{
+    "filters":{
+        "dataset":"wiki1m_for_simcse_shuf",
+        "model":"bert-base-uncased",
+        "pooling":null,
+        "N":1000,
+        "max_length":32,
+        "cased":false,
+        "no_stop":false
+    },
+    "plot":{
+        "x":"layer",
+        "y":"anisotropy",
+        "color":"pooling",
+        "facet_row":null,
+        "facet_col":null
+    }
+}
