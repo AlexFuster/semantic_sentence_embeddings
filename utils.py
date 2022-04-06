@@ -18,6 +18,7 @@ BATCH_SIZE=128
 STOPWORDS=stopwords.words('english')
 #OUT_PATH='anisotropy_results.csv'
 OUT_PATH='anisotropy_results.csv'
+TASK=''
 #TASK='freq_bias'
 #TASK='case_bias'
 #TASK='subword_bias'
