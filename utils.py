@@ -85,14 +85,14 @@ class Evaluator():
                 sentences.append(f.readline())
         return sentences
 
-    def remove_stopword_embeddings(self,batch_tokens,attention_mask):
-        if self.config['no_stop']:
-            stopwords_mask=np.ones(attention_mask.shape)
+    def remove_sto_sub_embeddings(self,batch_tokens,attention_mask):
+        if self.config['no_stop'] or self.config['no_sub']:
+            aux_mask=np.ones(attention_mask.shape)
             for i,sent in enumerate(batch_tokens):
                 for j,token in enumerate(sent):
-                    if is_stopword(token):
-                        stopwords_mask[i,j]=0
-            attention_mask=attention_mask*torch.from_numpy(stopwords_mask)
+                    if (self.config['no_stop'] and is_stopword(token)) or (self.config['no_sub'] and is_subword(token)):
+                        aux_mask[i,j]=0
+            attention_mask=attention_mask*torch.from_numpy(aux_mask)
         return attention_mask
 
     def embedding2numpy(self,embeddings,attention_mask):
@@ -134,7 +134,7 @@ class Evaluator():
             sep_mask=F.pad(attention_mask,[0,1])
             sep_mask=torch.minimum(sep_mask[:,1:]-sep_mask[:,:-1],torch.Tensor([0]))
             attention_mask=attention_mask+sep_mask
-        attention_mask=self.remove_stopword_embeddings(batch_tokens,attention_mask)
+        attention_mask=self.remove_sto_sub_embeddings(batch_tokens,attention_mask)
         self.compute_metadata(tokens_metadata,batch_tokens,attention_mask)
 
         model_out=list(map(lambda x: self.embedding2numpy(x,attention_mask),model_out))
@@ -213,7 +213,8 @@ class Evaluator():
             'N':self.config['N'],
             'max_length':self.config['max_length'],
             'cased':self.config['cased'],
-            'no_stop':self.config['no_stop']
+            'no_stop':self.config['no_stop'],
+            'no_sub':self.config['no_sub']
         }
 
         query=[]
