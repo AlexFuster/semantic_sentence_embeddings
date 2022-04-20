@@ -1,5 +1,6 @@
 from time import time
 import json
+from turtle import forward
 from importlib_metadata import metadata
 from transformers import AutoTokenizer, AutoModel
 import torch
@@ -42,8 +43,27 @@ class Similarity(nn.Module):
         self.temp = temp
         self.cos = nn.CosineSimilarity(dim=-1)
 
-    def forward(self, x, y):
-        return self.cos(x, y) / self.temp
+    def forward(self, x, i):
+        return self.cos(x[i:i+1],x) / self.temp
+
+class ICM(nn.Module):
+    def __init__(self, beta=1.0):
+        self.beta=beta
+        self.cos = nn.CosineSimilarity(dim=-1)
+        self.precomputed=False
+
+    def precompute(self,x):
+        self.sq_mod=torch.sum(x**2,dim=1)
+        self.mod=torch.sqrt(self.sq_mod)
+        self.precomputed=True
+
+    def forward(self,x ,i):
+        if not self.precomputed:
+            self.precompute(x)
+        term1=(1-self.beta)*(self.sq_mod[i]+self.sq_mod)
+        term2=self.beta*self.mod[i]*self.mod*self.cos(x[i:i+1],x)
+        return term1+term2
+
 
 def deterministic_shuffle(x):
     np.random.seed(1234)
@@ -174,7 +194,7 @@ class Evaluator():
         results_an=np.zeros((n,n))
 
         for i in tqdm(range(n)):   
-            aux_sim=self.similarity(x[i:i+1], x).detach().numpy()
+            aux_sim=self.similarity(x, i).detach().numpy()
             res_isot=res_isot+aux_sim.mean()
             results_an[i]=aux_sim
 
