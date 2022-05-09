@@ -1,7 +1,5 @@
 from time import time
 import json
-from turtle import forward
-from importlib_metadata import metadata
 from transformers import AutoTokenizer, AutoModel
 import torch
 import torch.nn as nn
@@ -12,8 +10,10 @@ from tqdm import tqdm
 import pandas as pd
 from itertools import product
 from nltk.corpus import stopwords
+from scipy.stats import spearmanr
+import csv
 
-
+TASK='STS'
 #N=10
 BATCH_SIZE=128
 STOPWORDS=stopwords.words('english')
@@ -43,11 +43,15 @@ class Similarity(nn.Module):
         self.temp = temp
         self.cos = nn.CosineSimilarity(dim=-1)
 
-    def forward(self, x, i):
-        return self.cos(x[i:i+1],x) / self.temp
+    def forward(self,x,y):
+        return self.cos(x,y) / self.temp
+
+    def one_vs_all(self, x, i):
+        return self(x[i:i+1],x)
 
 class ICM(nn.Module):
     def __init__(self, beta=1.0):
+        super().__init__()
         self.beta=beta
         self.cos = nn.CosineSimilarity(dim=-1)
         self.precomputed=False
@@ -57,7 +61,14 @@ class ICM(nn.Module):
         self.mod=torch.sqrt(self.sq_mod)
         self.precomputed=True
 
-    def forward(self,x ,i):
+    def forward(self,x ,y):
+        sq_modx=torch.sum(x**2,dim=1)
+        sq_mody=torch.sum(y**2,dim=1)
+        term1=(1-self.beta)*(sq_modx+sq_mody)
+        term2=self.beta*torch.sqrt(sq_modx)*torch.sqrt(sq_mody)*self.cos(x,y)
+        return term1+term2     
+
+    def one_vs_all(self, x, i):
         if not self.precomputed:
             self.precompute(x)
         term1=(1-self.beta)*(self.sq_mod[i]+self.sq_mod)
@@ -80,6 +91,7 @@ class Evaluator():
         self.config=config
         self.anisotropy_results=results
         self.similarity=Similarity()
+        #self.similarity=ICM(1.0)
         with open('token_freqs_2.json','r') as f:
             self.dataset_frequencies=json.load(f)
 
@@ -194,7 +206,7 @@ class Evaluator():
         results_an=np.zeros((n,n))
 
         for i in tqdm(range(n)):   
-            aux_sim=self.similarity(x, i).detach().numpy()
+            aux_sim=self.similarity.one_vs_all(x, i).detach().numpy()
             res_isot=res_isot+aux_sim.mean()
             results_an[i]=aux_sim
 
@@ -221,6 +233,20 @@ class Evaluator():
         else:
             return None
     """
+    def read_stsb(self):
+        sts_test=pd.read_csv('../stsbenchmark/sts-test_fixed.csv', header = None, sep='\t', quoting=csv.QUOTE_NONE, names=['genre', 'filename', 'year', 'score', 'sentence1', 'sentence2'])
+        return sts_test['sentence1'].array ,sts_test['sentence2'].array ,sts_test['score'].array
+
+    def sts_benchmark(self):
+        sents1,sents2,annots=self.read_stsb()
+        self.model=self.get_model()
+        all_embeddings1=self.make_embeddings(sents1)[0]
+        all_embeddings2=self.make_embeddings(sents2)[0]
+        for i in range(13):
+            token_embeddings1=np.concatenate(all_embeddings1[i],axis=0)
+            token_embeddings2=np.concatenate(all_embeddings2[i],axis=0)
+            sims=self.similarity(torch.Tensor(token_embeddings1),torch.Tensor(token_embeddings2)).detach().numpy()
+            print(spearmanr(sims,annots))
 
     def run_configuration(self):
         txt_name=self.config['dataset'].replace('.txt','')
@@ -313,15 +339,16 @@ def my_product(inp):
 
 def grid_search(configs):
     try:
-        anisotropy_results=pd.read_csv(OUT_PATH,index_col=0)
+        results=pd.read_csv(OUT_PATH,index_col=0)
     except:
-        anisotropy_results=pd.DataFrame()
+        results=pd.DataFrame()
     configs=my_product(configs)
     print(pd.DataFrame(configs))
     for i in tqdm(range(len(configs))):
         config=configs[i]
-        evaluator=Evaluator(config,anisotropy_results)
-        anisotropy_results=evaluator.run_configuration()
+        evaluator=Evaluator(config,results)
+        evaluator.sts_benchmark()
+        #anisotropy_results=evaluator.run_configuration()
 
 def main(config_path):
     with open(config_path,'r') as f:
