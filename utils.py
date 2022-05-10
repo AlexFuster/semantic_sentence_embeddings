@@ -2,7 +2,6 @@ from time import time
 import json
 from transformers import AutoTokenizer, AutoModel
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import sys
@@ -13,13 +12,13 @@ from nltk.corpus import stopwords
 from scipy.stats import spearmanr
 import csv
 
-TASK='STS'
+from metrics import Cos
+
 #N=10
 BATCH_SIZE=128
 STOPWORDS=stopwords.words('english')
-#OUT_PATH='anisotropy_results.csv'
-OUT_PATH='anisotropy_results.csv'
-TASK=''
+TASK='STS'
+OUT_PATH=f'{TASK}_results.csv'
 #TASK='freq_bias'
 #TASK='case_bias'
 #TASK='subword_bias'
@@ -34,48 +33,6 @@ class Timer:
         
         return out_times,out_times/out_times.sum()
 
-class Similarity(nn.Module):
-    """
-    Dot product or cosine similarity
-    """
-    def __init__(self, temp=1.0):
-        super().__init__()
-        self.temp = temp
-        self.cos = nn.CosineSimilarity(dim=-1)
-
-    def forward(self,x,y):
-        return self.cos(x,y) / self.temp
-
-    def one_vs_all(self, x, i):
-        return self(x[i:i+1],x)
-
-class ICM(nn.Module):
-    def __init__(self, beta=1.0):
-        super().__init__()
-        self.beta=beta
-        self.cos = nn.CosineSimilarity(dim=-1)
-        self.precomputed=False
-
-    def precompute(self,x):
-        self.sq_mod=torch.sum(x**2,dim=1)
-        self.mod=torch.sqrt(self.sq_mod)
-        self.precomputed=True
-
-    def forward(self,x ,y):
-        sq_modx=torch.sum(x**2,dim=1)
-        sq_mody=torch.sum(y**2,dim=1)
-        term1=(1-self.beta)*(sq_modx+sq_mody)
-        term2=self.beta*torch.sqrt(sq_modx)*torch.sqrt(sq_mody)*self.cos(x,y)
-        return term1+term2     
-
-    def one_vs_all(self, x, i):
-        if not self.precomputed:
-            self.precompute(x)
-        term1=(1-self.beta)*(self.sq_mod[i]+self.sq_mod)
-        term2=self.beta*self.mod[i]*self.mod*self.cos(x[i:i+1],x)
-        return term1+term2
-
-
 def deterministic_shuffle(x):
     np.random.seed(1234)
     np.random.shuffle(x)
@@ -89,9 +46,8 @@ def is_subword(token):
 class Evaluator():
     def __init__(self,config,results) -> None:
         self.config=config
-        self.anisotropy_results=results
-        self.similarity=Similarity()
-        #self.similarity=ICM(1.0)
+        self.results=results
+        self.similarity=Cos()
         with open('token_freqs_2.json','r') as f:
             self.dataset_frequencies=json.load(f)
 
@@ -218,38 +174,68 @@ class Evaluator():
 
         return res_isot/n
 
-    """
-    def compute_freq_diff(self,freqs):
-        n=self.config['N']
-        if TASK=='freq_bias':
-            results=np.zeros((n**2,))
-            freqs=np.concatenate(freqs,axis=0)
-            #deterministic_shuffle(freqs)
-            freqs=freqs[:n]
-            for i in tqdm(range(n)):
-                aux_freq_dif=abs(freqs[i:i+1]-freqs)
-                results[i*n:(i+1)*n]=aux_freq_dif
-            return results
-        else:
-            return None
-    """
     def read_stsb(self):
         sts_test=pd.read_csv('../stsbenchmark/sts-test_fixed.csv', header = None, sep='\t', quoting=csv.QUOTE_NONE, names=['genre', 'filename', 'year', 'score', 'sentence1', 'sentence2'])
         return sts_test['sentence1'].array ,sts_test['sentence2'].array ,sts_test['score'].array
 
-    def sts_benchmark(self):
-        sents1,sents2,annots=self.read_stsb()
+    def sts_benchmark(self,name,combination_config):
+        timer=Timer()
         self.model=self.get_model()
+        timer()
+        sents1,sents2,annots=self.read_stsb()
+        timer()
+        print('Computing embeddings(1)...')
         all_embeddings1=self.make_embeddings(sents1)[0]
+        timer()
+        print('Computing embeddings(2)...')
         all_embeddings2=self.make_embeddings(sents2)[0]
+        timer()
+        per_layer_sts=[]
+        print('Computing benchmark...')
         for i in range(13):
             token_embeddings1=np.concatenate(all_embeddings1[i],axis=0)
             token_embeddings2=np.concatenate(all_embeddings2[i],axis=0)
             sims=self.similarity(torch.Tensor(token_embeddings1),torch.Tensor(token_embeddings2)).detach().numpy()
-            print(spearmanr(sims,annots))
+            per_layer_sts.append(spearmanr(sims,annots).correlation)
+
+        print(timer.get_times())
+        print(per_layer_sts)
+
+        rows=pd.DataFrame([dict(
+            **combination_config,
+            name=name,
+            layer=i,
+            STSB=per_layer_sts[i],            
+        ) for i in range(len(per_layer_sts))])
+        return rows
+
+    def anisotropy(self,name,combination_config):
+        timer=Timer()
+        self.model=self.get_model()
+        timer()
+        sentences=self.read_wikisent()
+        timer()
+        print('Computing embeddings...')
+        token_embeddings, tokens_metadata=self.make_embeddings(sentences)
+        timer()
+        print('Computing similarities...')
+        per_layer_similarities=list(map(lambda x: self.get_similarity_prompt(x,tokens_metadata),tqdm(enumerate(token_embeddings))))
+        timer()
+        print(timer.get_times())
+        print(per_layer_similarities)
+        
+        rows=pd.DataFrame([dict(
+            **combination_config,
+            name=name,
+            layer=i,
+            anisotropy=per_layer_similarities[i],
+            inference_time=timer.get_times()[0][2]/self.config['N'],
+            
+        ) for i in range(len(per_layer_similarities))])
+        return rows
 
     def run_configuration(self):
-        txt_name=self.config['dataset'].replace('.txt','')
+        txt_name=self.config['dataset'].replace('.txt','').replace('.csv','')
         model_name=self.config['model'].split('/')[-1]
         name=f"{txt_name}|{model_name}|{self.config['pooling']}|{self.config['N']}|{self.config['max_length']}"
         combination_config={
@@ -272,67 +258,15 @@ class Evaluator():
 
         query=' & '.join(query)
 
-        if 'bias' in TASK or self.anisotropy_results.shape[0]==0 or self.anisotropy_results.query(query).shape[0]==0:
-            timer=Timer()
-            self.model=self.get_model()
-            timer()
-            sentences=self.read_wikisent()
-            timer()
-            print('Computing embeddings...')
-            token_embeddings, tokens_metadata=self.make_embeddings(sentences)
-            timer()
-            #freq_diff=self.compute_freq_diff(token_freqs)
-            print('Computing similarities...')
-            per_layer_similarities=list(map(lambda x: self.get_similarity_prompt(x,tokens_metadata),tqdm(enumerate(token_embeddings))))
-            timer()
-            print(timer.get_times())
-            print(per_layer_similarities)
-
-            #name=make_name([txt_name,model_name,POOLING,N],[25,30,20,5])
-            
-            rows=pd.DataFrame([dict(
-                **combination_config,
-                name=name,
-                layer=i,
-                anisotropy=per_layer_similarities[i],
-                inference_time=timer.get_times()[0][2]/self.config['N'],
-                
-            ) for i in range(len(per_layer_similarities))])
-            self.anisotropy_results=self.anisotropy_results.append(rows)
-            print(self.anisotropy_results)
-            self.anisotropy_results.to_csv(OUT_PATH)
-        return self.anisotropy_results
-
-
-
-"""
-def get_embedding_pairs(x):
-    res=np.concatenate(x,axis=0)
-    np.random.shuffle(res)
-    n_tokens, embed_dim=res.shape
-    if n_tokens%2!=0:
-        res=res[:-1]
-        n_tokens-=1
-    res=res.reshape(n_tokens//2,2,embed_dim)
-    return res
-
-def get_similarities(x,similarity):
-    similarities=[]
-    for token_pair in x:
-        similarities.append(similarity(token_pair[0],token_pair[1]))
-    similarities=np.array(similarities)
-    return (similarities.shape[0],similarities.mean(),similarities.std())
-
-def pad_with_spaces(arg,fixed_length):
-    arg=str(arg).lower()
-    return ' '*(fixed_length-len(arg))+arg
-
-def make_name(strs,fixed_lengths):
-    name=[]
-    for s,l in zip(strs,fixed_lengths):
-        name.append(pad_with_spaces(s,l))
-    return ' | '.join(name)
-"""
+        if 'bias' in TASK or self.results.shape[0]==0 or self.results.query(query).shape[0]==0:
+            if TASK=='STS':
+                rows=self.sts_benchmark(name,combination_config)
+            else:
+                rows=self.anisotropy(name,combination_config)
+            self.results=self.results.append(rows)
+            print(self.results)
+            self.results.to_csv(OUT_PATH)
+        return self.results
 
 def my_product(inp):
     return [dict(zip(inp.keys(), values)) for values in product(*inp.values())]
@@ -347,8 +281,7 @@ def grid_search(configs):
     for i in tqdm(range(len(configs))):
         config=configs[i]
         evaluator=Evaluator(config,results)
-        evaluator.sts_benchmark()
-        #anisotropy_results=evaluator.run_configuration()
+        results=evaluator.run_configuration()
 
 def main(config_path):
     with open(config_path,'r') as f:
