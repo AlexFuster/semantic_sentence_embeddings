@@ -19,6 +19,7 @@ BATCH_SIZE=128
 STOPWORDS=stopwords.words('english')
 TASK='STS'
 OUT_PATH=f'{TASK}_results.csv'
+pun_remove_set = {'?', '*', '#', '´', '’', '=', '…', '|', '~', '/', ',', '¿', '-', '»', '-', '€', '‘', '"', '(', '•', '`', '$', ':', '[', '”', '%', '£', '<', '[UNK]', ';', '“', '@', '_', '{', '^', ',', '.', '!', '™', '&', ']', '>', '\\', "'", ')', '+', '—'}
 #TASK='freq_bias'
 #TASK='case_bias'
 #TASK='subword_bias'
@@ -41,7 +42,7 @@ def is_stopword(token):
     return token in STOPWORDS
 
 def is_subword(token):
-    return token.startswith('#')
+    return token.startswith('#') or token in pun_remove_set
 
 class Evaluator():
     def __init__(self,config,results) -> None:
@@ -123,6 +124,10 @@ class Evaluator():
             sep_mask=torch.minimum(sep_mask[:,1:]-sep_mask[:,:-1],torch.Tensor([0]))
             attention_mask=attention_mask+sep_mask
         attention_mask=self.remove_sto_sub_embeddings(batch_tokens,attention_mask)
+        #has_tokens_left=torch.sum(attention_mask,dim=1)>0
+        #attention_mask=attention_mask[has_tokens_left]
+        #batch_tokens=list(list(zip(*list(filter(lambda x:x[1],zip(batch_tokens,has_tokens_left)))))[0])
+
         self.compute_metadata(tokens_metadata,batch_tokens,attention_mask)
 
         model_out=list(map(lambda x: self.embedding2numpy(x,attention_mask),model_out))
@@ -196,7 +201,9 @@ class Evaluator():
             token_embeddings1=np.concatenate(all_embeddings1[i],axis=0)
             token_embeddings2=np.concatenate(all_embeddings2[i],axis=0)
             sims=self.similarity(torch.Tensor(token_embeddings1),torch.Tensor(token_embeddings2)).detach().numpy()
-            per_layer_sts.append(spearmanr(sims,annots).correlation)
+            not_nan_mask=~np.isnan(sims)
+            sims=sims[not_nan_mask]
+            per_layer_sts.append(spearmanr(sims,annots[not_nan_mask]).correlation)
 
         print(timer.get_times())
         print(per_layer_sts)
@@ -205,7 +212,7 @@ class Evaluator():
             **combination_config,
             name=name,
             layer=i,
-            STSB=per_layer_sts[i],            
+            STS=per_layer_sts[i],            
         ) for i in range(len(per_layer_sts))])
         return rows
 
