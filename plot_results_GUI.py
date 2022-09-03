@@ -4,7 +4,8 @@ import pandas as pd
 import json
 from plot_results import plotly_plot
 
-TASK='STS'
+TASK='isotropy'
+#TASK='STS'
 OUT_PATH=f'{TASK}_results.csv'
 
 def run_plot():
@@ -55,7 +56,7 @@ for i,col in enumerate(filter_columns):
     aux_label.grid(row=i+1, column=0)
     aux_combo.grid(row=i+1, column=1, ipadx="100")
 
-for col in ["N","max_length","cased","no_stop","no_sub"]:
+for col in ["N","max_length","cased","no_stop","no_sub","no_cls","no_sep"]:
     filter_fields[col].current(1)
 
 plot_fields={}

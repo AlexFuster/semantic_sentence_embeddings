@@ -16,6 +16,19 @@ class Cos(nn.Module):
     def one_vs_all(self, x, i):
         return self(x[i:i+1],x)
 
+class Euclidean(nn.Module):
+    """
+    Negative l2 distance
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self,x,y):
+        return -((x-y)**2).mean(dim=-1)
+
+    def one_vs_all(self, x, i):
+        return self(x[i:i+1],x)
+
 class ICM(nn.Module):
     def __init__(self, beta=1.0):
         super().__init__()

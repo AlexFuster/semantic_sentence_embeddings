@@ -12,15 +12,16 @@ from nltk.corpus import stopwords
 from scipy.stats import spearmanr
 import csv
 
-from metrics import Cos
+from metrics import Cos, Euclidean
 
 #N=10
 BATCH_SIZE=128
 STOPWORDS=stopwords.words('english')
-TASK='STS'
+#TASK='STS'
+TASK='isotropy'
 OUT_PATH=f'{TASK}_results.csv'
 pun_remove_set = {'?', '*', '#', '´', '’', '=', '…', '|', '~', '/', ',', '¿', '-', '»', '-', '€', '‘', '"', '(', '•', '`', '$', ':', '[', '”', '%', '£', '<', '[UNK]', ';', '“', '@', '_', '{', '^', ',', '.', '!', '™', '&', ']', '>', '\\', "'", ')', '+', '—'}
-#TASK='freq_bias'
+TASK='bias'
 #TASK='case_bias'
 #TASK='subword_bias'
 
@@ -48,7 +49,12 @@ class Evaluator():
     def __init__(self,config,results) -> None:
         self.config=config
         self.results=results
-        self.similarity=Cos()
+        if config['metric']=='cosine':
+            self.similarity=Cos()
+        elif config['metric']=='euclidean':
+            self.similarity=Euclidean()
+        else: raise ValueError('Non existent metric')
+
         with open('token_freqs_2.json','r') as f:
             self.dataset_frequencies=json.load(f)
 
@@ -99,27 +105,18 @@ class Evaluator():
 
     def compute_metadata(self,tokens_metadata,batch_tokens,attention_mask):
         if 'bias' in TASK:
-            freq_misses=0
             for i in range(len(batch_tokens)):
                 for j in range(len(batch_tokens[i])):
                     if attention_mask[i,j]==1:
-                        if TASK=='freq_bias':
-                            if batch_tokens[i][j] in self.dataset_frequencies.keys():
-                                tokens_metadata['freqs'].append(self.dataset_frequencies[ batch_tokens[i][j]])
-                                tokens_metadata['stopword_flag'].append(is_stopword(batch_tokens[i][j]))
-                            else: 
-                                freq_misses+=1
-                                attention_mask[i,j]=0
-                        elif TASK=='case_bias':
-                            tokens_metadata['lowcase_flag'].append(batch_tokens[i][j].islower())
-                        elif TASK=='subword_bias':
-                            tokens_metadata['subword_flag'].append(is_subword(batch_tokens[i][j]))
+                        tokens_metadata['stopword_flag'].append(is_stopword(batch_tokens[i][j]))
+                        tokens_metadata['lowcase_flag'].append(batch_tokens[i][j].islower())
+                        tokens_metadata['subword_flag'].append(is_subword(batch_tokens[i][j]))
 
     def process_batch(self,token_embeddings,tokens_metadata,batch):
         model_out,attention_mask,batch_tokens=self.model(batch)
-        if 'no_CLS' in self.config['pooling']:
+        if self.config['no_cls']:
             attention_mask[:,0]=0
-        if 'no_SEP' in self.config['pooling']:
+        if self.config['no_sep']:
             sep_mask=F.pad(attention_mask,[0,1])
             sep_mask=torch.minimum(sep_mask[:,1:]-sep_mask[:,:-1],torch.Tensor([0]))
             attention_mask=attention_mask+sep_mask
@@ -155,7 +152,9 @@ class Evaluator():
         n=self.config['N']
         x=np.concatenate(x,axis=0)
         deterministic_shuffle(x)
+        x=x[~(np.isnan(x).any(axis=1))]
         x=x[:n]
+        n=x.shape[0]
         aux_metadata={}
         for k in tokens_metadata.keys():
             if len(tokens_metadata[k])>0:
@@ -216,7 +215,7 @@ class Evaluator():
         ) for i in range(len(per_layer_sts))])
         return rows
 
-    def anisotropy(self,name,combination_config):
+    def isotropy(self,name,combination_config):
         timer=Timer()
         self.model=self.get_model()
         timer()
@@ -235,7 +234,7 @@ class Evaluator():
             **combination_config,
             name=name,
             layer=i,
-            anisotropy=per_layer_similarities[i],
+            isotropy=per_layer_similarities[i],
             inference_time=timer.get_times()[0][2]/self.config['N'],
             
         ) for i in range(len(per_layer_similarities))])
@@ -253,7 +252,9 @@ class Evaluator():
             'max_length':self.config['max_length'],
             'cased':self.config['cased'],
             'no_stop':self.config['no_stop'],
-            'no_sub':self.config['no_sub']
+            'no_sub':self.config['no_sub'],
+            'no_cls':self.config['no_cls'],
+            'no_sep':self.config['no_sep']
         }
 
         query=[]
@@ -269,7 +270,7 @@ class Evaluator():
             if TASK=='STS':
                 rows=self.sts_benchmark(name,combination_config)
             else:
-                rows=self.anisotropy(name,combination_config)
+                rows=self.isotropy(name,combination_config)
             self.results=self.results.append(rows)
             print(self.results)
             self.results.to_csv(OUT_PATH)

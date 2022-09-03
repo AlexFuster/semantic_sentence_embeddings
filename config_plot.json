@@ -8,6 +8,8 @@
         "cased":false,
         "no_stop":false,
         "no_sub":false,
+        "no_cls":false,
+        "no_sep":false,
         "layer":null
     },
     "plot":{

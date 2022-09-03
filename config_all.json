@@ -5,13 +5,16 @@
         "princeton-nlp/unsup-simcse-bert-base-uncased","princeton-nlp/sup-simcse-bert-base-uncased",
         "../unsup_prompt","../sup_prompt"],
     "pooling":[
-        "none","none_no_SEP","none_no_CLS","none_no_SEP_no_CLS",
-        "avg","avg_no_SEP","avg_no_CLS","avg_no_SEP_no_CLS",
+        "none",
+        "avg",
         "CLS"
     ],
     "max_length":32,
     "N":1000,
     "cased":[false,true],
     "no_stop":[false,true],
-    "no_sub":[false,true]
+    "no_sub":[false,true],
+    "no_cls":[false,true],
+    "no_sep":[false,true],
+    "metric":["cosine","euclidean"]
 }
